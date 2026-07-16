@@ -28,9 +28,9 @@ jobs:
       - name: Build ETF-BFF Docker image
         run: |
           docker build \
-            -f etf-bff/Dockerfile \
-            -t etf-bff:test \
-            etf-bff
+            -f ETF-bff/Dockerfile \
+            -t ETF-bff:test \
+            ETF-bff
 
       # ==================================================
       # 3. CONSTRUIR ETF-CONSUMIDOR
@@ -38,9 +38,9 @@ jobs:
       - name: Build ETF-CONSUMIDOR Docker image
         run: |
           docker build \
-            -f etf-consumidor/Dockerfile \
-            -t etf-consumidor:test \
-            etf-consumidor
+            -f ETF-consumidor/Dockerfile \
+            -t ETF-consumidor:test \
+            ETF-consumidor
 
       # ==================================================
       # 4. INICIAR SESIÓN EN DOCKER HUB
@@ -60,12 +60,12 @@ jobs:
         if: github.event_name == 'push'
         run: |
           docker tag \
-            etf-bff:test \
-            ${{ secrets.DOCKERHUB_USERNAME }}/etf-bff:latest
+            ETF-bff:test \
+            ${{ secrets.DOCKERHUB_USERNAME }}/ETF-bff:latest
 
           docker tag \
-            etf-consumidor:test \
-            ${{ secrets.DOCKERHUB_USERNAME }}/etf-consumidor:latest
+            ETF-consumidor:test \
+            ${{ secrets.DOCKERHUB_USERNAME }}/ETF-consumidor:latest
 
       # ==================================================
       # 6. PUBLICAR ETF-BFF EN DOCKER HUB
@@ -74,7 +74,7 @@ jobs:
         if: github.event_name == 'push'
         run: |
           docker push \
-            ${{ secrets.DOCKERHUB_USERNAME }}/etf-bff:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/ETF-bff:latest
 
       # ==================================================
       # 7. PUBLICAR ETF-CONSUMIDOR EN DOCKER HUB
@@ -83,7 +83,7 @@ jobs:
         if: github.event_name == 'push'
         run: |
           docker push \
-            ${{ secrets.DOCKERHUB_USERNAME }}/etf-consumidor:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/ETF-consumidor:latest
 
       # ==================================================
       # 8. CONFIGURAR CLAVE SSH
@@ -143,23 +143,23 @@ jobs:
           echo "Descargando imagen ETF-BFF..."
 
           docker pull \
-            ${{ secrets.DOCKERHUB_USERNAME }}/etf-bff:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/ETF-bff:latest
 
           echo "Descargando imagen ETF-CONSUMIDOR..."
 
           docker pull \
-            ${{ secrets.DOCKERHUB_USERNAME }}/etf-consumidor:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/ETF-consumidor:latest
 
           # ----------------------------------------------
           # Eliminar contenedores anteriores
           # ----------------------------------------------
           echo "Deteniendo contenedores anteriores..."
 
-          docker stop etf-bff || true
-          docker rm etf-bff || true
+          docker stop ETF-bff || true
+          docker rm ETF-bff || true
 
-          docker stop etf-consumidor || true
-          docker rm etf-consumidor || true
+          docker stop ETF-consumidor || true
+          docker rm ETF-consumidor || true
 
           # ----------------------------------------------
           # Crear red compartida
@@ -195,7 +195,7 @@ jobs:
           echo "Levantando ETF-BFF..."
 
           docker run -d \
-            --name etf-bff \
+            --name ETF-bff \
             --restart unless-stopped \
             --network app-network \
             -p 8080:8080 \
@@ -203,7 +203,7 @@ jobs:
             -e RABBITMQ_USERNAME="appuser" \
             -e RABBITMQ_PASSWORD="${{ secrets.RABBITMQ_PASSWORD }}" \
             -e JWT_ISSUER_URI="${{ secrets.JWT_ISSUER_URI }}" \
-            ${{ secrets.DOCKERHUB_USERNAME }}/etf-bff:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/ETF-bff:latest
 
           # ----------------------------------------------
           # Levantar ETF-CONSUMIDOR
@@ -212,7 +212,7 @@ jobs:
           echo "Levantando ETF-CONSUMIDOR..."
 
           docker run -d \
-            --name etf-consumidor \
+            --name ETF-consumidor \
             --restart unless-stopped \
             --network app-network \
             -p 8081:8081 \
@@ -225,7 +225,7 @@ jobs:
             -e RABBITMQ_USERNAME="appuser" \
             -e RABBITMQ_PASSWORD="${{ secrets.RABBITMQ_PASSWORD }}" \
             -e JWT_ISSUER_URI="${{ secrets.JWT_ISSUER_URI }}" \
-            ${{ secrets.DOCKERHUB_USERNAME }}/etf-consumidor:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/ETF-consumidor:latest
 
           # ----------------------------------------------
           # Esperar el inicio de Spring Boot
@@ -277,7 +277,7 @@ jobs:
 
             docker logs \
               --tail 150 \
-              etf-consumidor
+              ETF-consumidor
 
             exit 1
           fi
@@ -292,13 +292,13 @@ jobs:
 
           docker logs \
             --tail 50 \
-            etf-bff
+            ETF-bff
 
           echo "Últimos logs de ETF-CONSUMIDOR:"
 
           docker logs \
             --tail 50 \
-            etf-consumidor
+            ETF-consumidor
 
           echo "=========================================="
           echo "Despliegue finalizado correctamente"
