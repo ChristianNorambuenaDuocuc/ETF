@@ -150,8 +150,13 @@ jobs:
 
           echo "Conectando RabbitMQ a app-network..."
 
-          docker network connect app-network rabbitmq1 2>/dev/null || true
-          docker network connect app-network rabbitmq2 2>/dev/null || true
+          docker network connect \
+            app-network \
+            rabbitmq1 2>/dev/null || true
+
+          docker network connect \
+            app-network \
+            rabbitmq2 2>/dev/null || true
 
           echo "Verificando Oracle Wallet..."
 
@@ -208,6 +213,8 @@ jobs:
                 --fail \
                 --silent \
                 --show-error \
+                --connect-timeout 5 \
+                --max-time 8 \
                 "$URL"; then
 
                 echo ""
@@ -215,7 +222,11 @@ jobs:
                 return 0
               fi
 
-              if [ "$(docker inspect -f '{{.State.Running}}' "$NOMBRE" 2>/dev/null)" != "true" ]; then
+              ESTADO=$(docker inspect \
+                -f '{{.State.Running}}' \
+                "$NOMBRE" 2>/dev/null || echo "false")
+
+              if [ "$ESTADO" != "true" ]; then
                 echo "$NOMBRE se detuvo durante el inicio."
 
                 docker logs \
