@@ -14,15 +14,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ==================================================
-      # 1. DESCARGAR EL REPOSITORIO
-      # ==================================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ==================================================
-      # 2. MOSTRAR ESTRUCTURA
-      # ==================================================
       - name: Show repository structure
         run: |
           echo "Contenido de la raíz:"
@@ -34,9 +28,6 @@ jobs:
           echo "Archivos pom.xml encontrados:"
           find . -maxdepth 3 -type f -name "pom.xml"
 
-      # ==================================================
-      # 3. CONSTRUIR ETF-BFF
-      # ==================================================
       - name: Build etf-bff Docker image
         run: |
           docker build \
@@ -44,9 +35,6 @@ jobs:
             -t etf-bff:test \
             etf-bff
 
-      # ==================================================
-      # 4. CONSTRUIR ETF-CONSUMIDOR
-      # ==================================================
       - name: Build etf-consumidor Docker image
         run: |
           docker build \
@@ -54,9 +42,6 @@ jobs:
             -t etf-consumidor:test \
             etf-consumidor
 
-      # ==================================================
-      # 5. LOGIN DOCKER HUB
-      # ==================================================
       - name: Log in to Docker Hub
         if: github.event_name == 'push'
         uses: docker/login-action@v3
@@ -64,9 +49,6 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # ==================================================
-      # 6. ETIQUETAR IMÁGENES
-      # ==================================================
       - name: Tag Docker images
         if: github.event_name == 'push'
         run: |
@@ -78,27 +60,15 @@ jobs:
             etf-consumidor:test \
             ${{ secrets.DOCKERHUB_USERNAME }}/etf-consumidor:latest
 
-      # ==================================================
-      # 7. PUSH ETF-BFF
-      # ==================================================
-      - name: Push etf-bff image
+      - name: Push Docker images
         if: github.event_name == 'push'
         run: |
           docker push \
             ${{ secrets.DOCKERHUB_USERNAME }}/etf-bff:latest
 
-      # ==================================================
-      # 8. PUSH ETF-CONSUMIDOR
-      # ==================================================
-      - name: Push etf-consumidor image
-        if: github.event_name == 'push'
-        run: |
           docker push \
             ${{ secrets.DOCKERHUB_USERNAME }}/etf-consumidor:latest
 
-      # ==================================================
-      # 9. CONFIGURAR CLAVE SSH
-      # ==================================================
       - name: Add SSH key
         if: github.event_name == 'push'
         run: |
@@ -110,9 +80,6 @@ jobs:
 
           chmod 600 ~/.ssh/id_rsa
 
-      # ==================================================
-      # 10. PROBAR CONEXIÓN SSH
-      # ==================================================
       - name: Test SSH connection
         if: github.event_name == 'push'
         run: |
@@ -124,9 +91,6 @@ jobs:
             ${{ secrets.USER_SERVER }}@${{ secrets.EC2_HOST }} \
             "echo 'Conexión SSH correcta con EC2'"
 
-      # ==================================================
-      # 11. DESPLEGAR EN EC2
-      # ==================================================
       - name: Deploy ETF microservices in EC2
         if: github.event_name == 'push'
         run: |
@@ -150,67 +114,51 @@ jobs:
             -u "${{ secrets.DOCKERHUB_USERNAME }}" \
             --password-stdin
 
-          echo "Descargando imagen etf-bff..."
+          echo "Descargando imágenes..."
 
           docker pull \
             ${{ secrets.DOCKERHUB_USERNAME }}/etf-bff:latest
-
-          echo "Descargando imagen etf-consumidor..."
 
           docker pull \
             ${{ secrets.DOCKERHUB_USERNAME }}/etf-consumidor:latest
 
           echo "Eliminando contenedores anteriores..."
 
-          docker stop etf-bff || true
-          docker rm etf-bff || true
+          docker rm -f etf-bff || true
+          docker rm -f etf-consumidor || true
 
-          docker stop etf-consumidor || true
-          docker rm etf-consumidor || true
-
-          # ==================================================
-          # LIBERAR PUERTO 8080
-          # ==================================================
           echo "Liberando puerto 8080..."
 
           CONTENEDORES_8080=$(docker ps -q --filter publish=8080)
 
           if [ -n "$CONTENEDORES_8080" ]; then
-            docker stop $CONTENEDORES_8080
-            docker rm $CONTENEDORES_8080
+            docker rm -f $CONTENEDORES_8080
           fi
 
-          # ==================================================
-          # LIBERAR PUERTO 8081
-          # ==================================================
           echo "Liberando puerto 8081..."
 
           CONTENEDORES_8081=$(docker ps -q --filter publish=8081)
 
           if [ -n "$CONTENEDORES_8081" ]; then
-            docker stop $CONTENEDORES_8081
-            docker rm $CONTENEDORES_8081
+            docker rm -f $CONTENEDORES_8081
           fi
 
           echo "Preparando red app-network..."
 
-          docker network create app-network || true
+          docker network inspect app-network >/dev/null 2>&1 || \
+          docker network create app-network
 
-          echo "Conectando rabbitmq1..."
+          echo "Conectando RabbitMQ a app-network..."
 
-          docker network connect \
-            app-network \
-            rabbitmq1 || true
+          docker network connect app-network rabbitmq1 2>/dev/null || true
+          docker network connect app-network rabbitmq2 2>/dev/null || true
 
-          echo "Conectando rabbitmq2..."
+          echo "Verificando Oracle Wallet..."
 
-          docker network connect \
-            app-network \
-            rabbitmq2 || true
-
-          echo "Preparando Oracle Wallet..."
-
-          mkdir -p /home/ec2-user/oracle-wallet
+          if [ ! -f /home/ec2-user/oracle-wallet/tnsnames.ora ]; then
+            echo "No se encontró /home/ec2-user/oracle-wallet/tnsnames.ora"
+            exit 1
+          fi
 
           echo "Levantando etf-bff..."
 
@@ -233,9 +181,6 @@ jobs:
             --network app-network \
             -p 8081:8081 \
             -v /home/ec2-user/oracle-wallet:/app/wallet:ro \
-            -e ORACLE_URL="${{ secrets.ORACLE_URL }}" \
-            -e ORACLE_USERNAME="${{ secrets.ORACLE_USERNAME }}" \
-            -e ORACLE_PASSWORD="${{ secrets.ORACLE_PASSWORD }}" \
             -e TNS_ADMIN="/app/wallet" \
             -e RABBITMQ_ADDRESSES="rabbitmq1:5672,rabbitmq2:5672" \
             -e RABBITMQ_USERNAME="appuser" \
@@ -243,89 +188,59 @@ jobs:
             -e JWT_ISSUER_URI="${{ secrets.JWT_ISSUER_URI }}" \
             ${{ secrets.DOCKERHUB_USERNAME }}/etf-consumidor:latest
 
-          echo "Esperando inicio de los microservicios..."
+          esperar_endpoint() {
+            NOMBRE="$1"
+            URL="$2"
+            MAX_INTENTOS="$3"
 
-          sleep 30
+            echo "Esperando respuesta de $NOMBRE..."
 
-          echo "Estado de los contenedores:"
+            for INTENTO in $(seq 1 "$MAX_INTENTOS"); do
+              echo "Intento $INTENTO de $MAX_INTENTOS para $NOMBRE"
 
+              if curl \
+                --fail \
+                --silent \
+                --show-error \
+                "$URL"; then
+
+                echo ""
+                echo "$NOMBRE está funcionando."
+                return 0
+              fi
+
+              if [ "$(docker inspect -f '{{.State.Running}}' "$NOMBRE" 2>/dev/null)" != "true" ]; then
+                echo "$NOMBRE se detuvo durante el inicio."
+                docker logs --tail 300 "$NOMBRE" || true
+                return 1
+              fi
+
+              sleep 10
+            done
+
+            echo "$NOMBRE no respondió dentro del tiempo esperado."
+            docker logs --tail 300 "$NOMBRE" || true
+            return 1
+          }
+
+          echo "Estado inicial de los contenedores:"
           docker ps -a
 
-          echo "Verificando contenedor etf-bff..."
+          esperar_endpoint \
+            "etf-bff" \
+            "http://localhost:8080/api/bff/estado" \
+            12
 
-          if [ "$(docker inspect -f '{{.State.Running}}' etf-bff 2>/dev/null)" != "true" ]; then
-            echo "El contenedor etf-bff no está activo."
-
-            docker logs \
-              --tail 200 \
-              etf-bff || true
-
-            exit 1
-          fi
-
-          echo "Comprobando endpoint etf-bff..."
-
-          if ! curl \
-            --fail \
-            --silent \
-            --show-error \
-            http://localhost:8080/api/bff/estado; then
-
-            echo "etf-bff no respondió correctamente."
-
-            docker logs \
-              --tail 200 \
-              etf-bff || true
-
-            exit 1
-          fi
-
-          echo ""
-          echo "etf-bff está funcionando."
-
-          echo "Verificando contenedor etf-consumidor..."
-
-          if [ "$(docker inspect -f '{{.State.Running}}' etf-consumidor 2>/dev/null)" != "true" ]; then
-            echo "El contenedor etf-consumidor no está activo."
-
-            docker logs \
-              --tail 200 \
-              etf-consumidor || true
-
-            exit 1
-          fi
-
-          echo "Comprobando endpoint etf-consumidor..."
-
-          if ! curl \
-            --fail \
-            --silent \
-            --show-error \
-            http://localhost:8081/api/mensajes/estado; then
-
-            echo "etf-consumidor no respondió correctamente."
-
-            docker logs \
-              --tail 200 \
-              etf-consumidor || true
-
-            exit 1
-          fi
-
-          echo ""
-          echo "etf-consumidor está funcionando."
+          esperar_endpoint \
+            "etf-consumidor" \
+            "http://localhost:8081/api/mensajes/estado" \
+            18
 
           echo "Últimos logs de etf-bff:"
-
-          docker logs \
-            --tail 50 \
-            etf-bff
+          docker logs --tail 50 etf-bff
 
           echo "Últimos logs de etf-consumidor:"
-
-          docker logs \
-            --tail 50 \
-            etf-consumidor
+          docker logs --tail 50 etf-consumidor
 
           echo "=========================================="
           echo "Despliegue finalizado correctamente"
