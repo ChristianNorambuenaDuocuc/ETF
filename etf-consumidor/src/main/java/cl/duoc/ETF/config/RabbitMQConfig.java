@@ -53,7 +53,7 @@ public class RabbitMQConfig {
     @Bean
 public MessageConverter jsonMessageConverter() {
     return new Jackson2JsonMessageConverter(
-            "com.sumativa.etf.dto"
+            "cl.duoc.ETF.dto"
     );
 }
 
