@@ -160,6 +160,11 @@ jobs:
             exit 1
           fi
 
+          echo "Aliases disponibles en Oracle Wallet:"
+
+          grep -i "^[a-zA-Z0-9_].*=" \
+            /home/ec2-user/oracle-wallet/tnsnames.ora || true
+
           echo "Levantando etf-bff..."
 
           docker run -d \
@@ -182,6 +187,7 @@ jobs:
             -p 8081:8081 \
             -v /home/ec2-user/oracle-wallet:/app/wallet:ro \
             -e TNS_ADMIN="/app/wallet" \
+            -e JAVA_TOOL_OPTIONS="-Doracle.net.tns_admin=/app/wallet" \
             -e RABBITMQ_ADDRESSES="rabbitmq1:5672,rabbitmq2:5672" \
             -e RABBITMQ_USERNAME="appuser" \
             -e RABBITMQ_PASSWORD="${{ secrets.RABBITMQ_PASSWORD }}" \
@@ -211,7 +217,11 @@ jobs:
 
               if [ "$(docker inspect -f '{{.State.Running}}' "$NOMBRE" 2>/dev/null)" != "true" ]; then
                 echo "$NOMBRE se detuvo durante el inicio."
-                docker logs --tail 300 "$NOMBRE" || true
+
+                docker logs \
+                  --tail 300 \
+                  "$NOMBRE" || true
+
                 return 1
               fi
 
@@ -219,11 +229,16 @@ jobs:
             done
 
             echo "$NOMBRE no respondió dentro del tiempo esperado."
-            docker logs --tail 300 "$NOMBRE" || true
+
+            docker logs \
+              --tail 300 \
+              "$NOMBRE" || true
+
             return 1
           }
 
           echo "Estado inicial de los contenedores:"
+
           docker ps -a
 
           esperar_endpoint \
@@ -237,10 +252,16 @@ jobs:
             18
 
           echo "Últimos logs de etf-bff:"
-          docker logs --tail 50 etf-bff
+
+          docker logs \
+            --tail 50 \
+            etf-bff
 
           echo "Últimos logs de etf-consumidor:"
-          docker logs --tail 50 etf-consumidor
+
+          docker logs \
+            --tail 50 \
+            etf-consumidor
 
           echo "=========================================="
           echo "Despliegue finalizado correctamente"
