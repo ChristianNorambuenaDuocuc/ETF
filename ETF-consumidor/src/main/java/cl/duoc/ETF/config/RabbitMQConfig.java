@@ -31,7 +31,7 @@ public class RabbitMQConfig {
                 .durable(QUEUE_MENSAJES)
                 .build();
     }
-
+/**direct */
     @Bean
     public DirectExchange mensajesExchange() {
         return new DirectExchange(
