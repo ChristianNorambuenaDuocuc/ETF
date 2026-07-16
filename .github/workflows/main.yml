@@ -1,4 +1,4 @@
-name: Build and Push Docker Image Transporte
+name: Build and Deploy ETF Microservices
 
 on:
   push:
@@ -14,58 +14,108 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Descargar el código del repositorio
+      # ==================================================
+      # 1. DESCARGAR EL REPOSITORIO
+      # ==================================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Iniciar sesión en Docker Hub
+      # ==================================================
+      # 2. CONSTRUIR ETF-BFF
+      # Se usa una etiqueta local para que también funcione
+      # durante un pull request sin acceder a secretos.
+      # ==================================================
+      - name: Build ETF-BFF Docker image
+        run: |
+          docker build \
+            -f etf-bff/Dockerfile \
+            -t etf-bff:test \
+            etf-bff
+
+      # ==================================================
+      # 3. CONSTRUIR ETF-CONSUMIDOR
+      # ==================================================
+      - name: Build ETF-CONSUMIDOR Docker image
+        run: |
+          docker build \
+            -f etf-consumidor/Dockerfile \
+            -t etf-consumidor:test \
+            etf-consumidor
+
+      # ==================================================
+      # 4. INICIAR SESIÓN EN DOCKER HUB
+      # Solo se ejecuta cuando existe un push a main.
+      # ==================================================
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        if: github.event_name == 'push'
+        uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # 3. Construir la imagen Docker
-      - name: Build Docker image
+      # ==================================================
+      # 5. ETIQUETAR LAS DOS IMÁGENES
+      # ==================================================
+      - name: Tag Docker images
+        if: github.event_name == 'push'
         run: |
-          docker build \
-            -f transporte/Dockerfile \
-            -t ${{ secrets.DOCKERHUB_USERNAME }}/transporte:latest \
-            transporte
+          docker tag \
+            etf-bff:test \
+            ${{ secrets.DOCKERHUB_USERNAME }}/etf-bff:latest
 
-      # 4. Publicar la imagen en Docker Hub
-      - name: Push Docker image
+          docker tag \
+            etf-consumidor:test \
+            ${{ secrets.DOCKERHUB_USERNAME }}/etf-consumidor:latest
+
+      # ==================================================
+      # 6. PUBLICAR ETF-BFF EN DOCKER HUB
+      # ==================================================
+      - name: Push ETF-BFF image
+        if: github.event_name == 'push'
         run: |
-          docker push ${{ secrets.DOCKERHUB_USERNAME }}/transporte:latest
+          docker push \
+            ${{ secrets.DOCKERHUB_USERNAME }}/etf-bff:latest
 
-      # 5. Configurar credenciales AWS
-      - name: Set up AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: us-east-1
+      # ==================================================
+      # 7. PUBLICAR ETF-CONSUMIDOR EN DOCKER HUB
+      # ==================================================
+      - name: Push ETF-CONSUMIDOR image
+        if: github.event_name == 'push'
+        run: |
+          docker push \
+            ${{ secrets.DOCKERHUB_USERNAME }}/etf-consumidor:latest
 
-      # 6. Configurar clave SSH
+      # ==================================================
+      # 8. CONFIGURAR CLAVE SSH
+      # ==================================================
       - name: Add SSH key
+        if: github.event_name == 'push'
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
+
+          echo "${{ secrets.EC2_SSH_KEY }}" \
+            > ~/.ssh/id_rsa
+
           chmod 600 ~/.ssh/id_rsa
 
-      # 7. Probar conexión con EC2
+      # ==================================================
+      # 9. PROBAR CONEXIÓN CON EC2
+      # ==================================================
       - name: Test SSH connection
+        if: github.event_name == 'push'
         run: |
           ssh \
             -i ~/.ssh/id_rsa \
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
             ${{ secrets.USER_SERVER }}@${{ secrets.EC2_HOST }} \
-            "echo 'Conexión SSH correcta'"
+            "echo 'Conexión SSH correcta con EC2'"
 
-      # 8. Desplegar aplicación en EC2
-      - name: Deploy application in EC2
+      # ==================================================
+      # 10. DESPLEGAR LOS DOS MICROSERVICIOS
+      # ==================================================
+      - name: Deploy ETF microservices in EC2
+        if: github.event_name == 'push'
         run: |
           ssh \
             -i ~/.ssh/id_rsa \
@@ -75,51 +125,183 @@ jobs:
 
           set -e
 
-          echo "Iniciando despliegue de Transporte..."
+          echo "=========================================="
+          echo "Iniciando despliegue de ETF"
+          echo "=========================================="
 
+          # ----------------------------------------------
+          # Iniciar sesión en Docker Hub desde EC2
+          # ----------------------------------------------
           echo "${{ secrets.DOCKERHUB_TOKEN }}" | \
           docker login \
             -u "${{ secrets.DOCKERHUB_USERNAME }}" \
             --password-stdin
 
-          echo "Descargando nueva imagen..."
-          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/transporte:latest
+          # ----------------------------------------------
+          # Descargar las imágenes nuevas
+          # ----------------------------------------------
+          echo "Descargando imagen ETF-BFF..."
 
-          echo "Eliminando contenedor anterior..."
-          docker stop transporte || true
-          docker rm transporte || true
+          docker pull \
+            ${{ secrets.DOCKERHUB_USERNAME }}/etf-bff:latest
 
-          echo "Creando red de la aplicación..."
+          echo "Descargando imagen ETF-CONSUMIDOR..."
+
+          docker pull \
+            ${{ secrets.DOCKERHUB_USERNAME }}/etf-consumidor:latest
+
+          # ----------------------------------------------
+          # Eliminar contenedores anteriores
+          # ----------------------------------------------
+          echo "Deteniendo contenedores anteriores..."
+
+          docker stop etf-bff || true
+          docker rm etf-bff || true
+
+          docker stop etf-consumidor || true
+          docker rm etf-consumidor || true
+
+          # ----------------------------------------------
+          # Crear red compartida
+          # ----------------------------------------------
+          echo "Preparando red app-network..."
+
           docker network create app-network || true
 
-          echo "Conectando rabbitmq1 a app-network..."
-          docker network connect app-network rabbitmq1 || true
+          # ----------------------------------------------
+          # Conectar los nodos RabbitMQ a la red
+          # ----------------------------------------------
+          echo "Conectando rabbitmq1..."
 
-          echo "Conectando rabbitmq2 a app-network..."
-          docker network connect app-network rabbitmq2 || true
+          docker network connect \
+            app-network \
+            rabbitmq1 || true
 
-          echo "Levantando contenedor Transporte..."
+          echo "Conectando rabbitmq2..."
+
+          docker network connect \
+            app-network \
+            rabbitmq2 || true
+
+          # ----------------------------------------------
+          # Verificar directorio del wallet Oracle
+          # ----------------------------------------------
+          mkdir -p /home/ec2-user/oracle-wallet
+
+          # ----------------------------------------------
+          # Levantar ETF-BFF
+          # Puerto externo 8080
+          # ----------------------------------------------
+          echo "Levantando ETF-BFF..."
+
           docker run -d \
-            --name transporte \
+            --name etf-bff \
             --restart unless-stopped \
             --network app-network \
             -p 8080:8080 \
-            -v /mnt/efs:/app/efs \
-            -v /home/ec2-user/oracle-wallet:/app/wallet \
-            -e AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}" \
-            -e AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
-            -e AWS_SESSION_TOKEN="${{ secrets.AWS_SESSION_TOKEN }}" \
             -e RABBITMQ_ADDRESSES="rabbitmq1:5672,rabbitmq2:5672" \
             -e RABBITMQ_USERNAME="appuser" \
             -e RABBITMQ_PASSWORD="${{ secrets.RABBITMQ_PASSWORD }}" \
-            ${{ secrets.DOCKERHUB_USERNAME }}/transporte:latest
+            -e JWT_ISSUER_URI="${{ secrets.JWT_ISSUER_URI }}" \
+            ${{ secrets.DOCKERHUB_USERNAME }}/etf-bff:latest
 
+          # ----------------------------------------------
+          # Levantar ETF-CONSUMIDOR
+          # El servicio escucha internamente en 8081.
+          # ----------------------------------------------
+          echo "Levantando ETF-CONSUMIDOR..."
+
+          docker run -d \
+            --name etf-consumidor \
+            --restart unless-stopped \
+            --network app-network \
+            -p 8081:8081 \
+            -v /home/ec2-user/oracle-wallet:/app/wallet:ro \
+            -e ORACLE_URL="${{ secrets.ORACLE_URL }}" \
+            -e ORACLE_USERNAME="${{ secrets.ORACLE_USERNAME }}" \
+            -e ORACLE_PASSWORD="${{ secrets.ORACLE_PASSWORD }}" \
+            -e TNS_ADMIN="/app/wallet" \
+            -e RABBITMQ_ADDRESSES="rabbitmq1:5672,rabbitmq2:5672" \
+            -e RABBITMQ_USERNAME="appuser" \
+            -e RABBITMQ_PASSWORD="${{ secrets.RABBITMQ_PASSWORD }}" \
+            -e JWT_ISSUER_URI="${{ secrets.JWT_ISSUER_URI }}" \
+            ${{ secrets.DOCKERHUB_USERNAME }}/etf-consumidor:latest
+
+          # ----------------------------------------------
+          # Esperar el inicio de Spring Boot
+          # ----------------------------------------------
+          echo "Esperando inicio de los microservicios..."
+
+          sleep 20
+
+          # ----------------------------------------------
+          # Mostrar contenedores activos
+          # ----------------------------------------------
           echo "Contenedores activos:"
+
           docker ps
 
-          echo "Red app-network:"
-          docker network inspect app-network
+          # ----------------------------------------------
+          # Verificar estado del BFF
+          # ----------------------------------------------
+          echo "Comprobando ETF-BFF..."
 
-          echo "Despliegue finalizado."
+          if ! curl \
+            --fail \
+            --silent \
+            http://localhost:8080/api/bff/estado; then
+
+            echo "ETF-BFF no respondió correctamente"
+
+            docker logs \
+              --tail 150 \
+              etf-bff
+
+            exit 1
+          fi
+
+          echo ""
+          echo "ETF-BFF está funcionando"
+
+          # ----------------------------------------------
+          # Verificar estado del consumidor
+          # ----------------------------------------------
+          echo "Comprobando ETF-CONSUMIDOR..."
+
+          if ! curl \
+            --fail \
+            --silent \
+            http://localhost:8081/api/mensajes/estado; then
+
+            echo "ETF-CONSUMIDOR no respondió correctamente"
+
+            docker logs \
+              --tail 150 \
+              etf-consumidor
+
+            exit 1
+          fi
+
+          echo ""
+          echo "ETF-CONSUMIDOR está funcionando"
+
+          # ----------------------------------------------
+          # Mostrar logs finales
+          # ----------------------------------------------
+          echo "Últimos logs de ETF-BFF:"
+
+          docker logs \
+            --tail 50 \
+            etf-bff
+
+          echo "Últimos logs de ETF-CONSUMIDOR:"
+
+          docker logs \
+            --tail 50 \
+            etf-consumidor
+
+          echo "=========================================="
+          echo "Despliegue finalizado correctamente"
+          echo "=========================================="
 
           EOF
