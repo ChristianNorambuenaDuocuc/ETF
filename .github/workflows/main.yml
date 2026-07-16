@@ -21,7 +21,7 @@ jobs:
         uses: actions/checkout@v4
 
       # ==================================================
-      # 2. MOSTRAR LA ESTRUCTURA DEL REPOSITORIO
+      # 2. MOSTRAR ESTRUCTURA
       # ==================================================
       - name: Show repository structure
         run: |
@@ -35,7 +35,7 @@ jobs:
           find . -maxdepth 3 -type f -name "pom.xml"
 
       # ==================================================
-      # 3. CONSTRUIR IMAGEN ETF-BFF
+      # 3. CONSTRUIR ETF-BFF
       # ==================================================
       - name: Build etf-bff Docker image
         run: |
@@ -45,7 +45,7 @@ jobs:
             etf-bff
 
       # ==================================================
-      # 4. CONSTRUIR IMAGEN ETF-CONSUMIDOR
+      # 4. CONSTRUIR ETF-CONSUMIDOR
       # ==================================================
       - name: Build etf-consumidor Docker image
         run: |
@@ -55,18 +55,17 @@ jobs:
             etf-consumidor
 
       # ==================================================
-      # 5. INICIAR SESIÓN EN DOCKER HUB
-      # Solo se ejecuta durante un push a main.
+      # 5. LOGIN DOCKER HUB
       # ==================================================
       - name: Log in to Docker Hub
         if: github.event_name == 'push'
-        uses: docker/login-action@v4
+        uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # ==================================================
-      # 6. ETIQUETAR LAS IMÁGENES
+      # 6. ETIQUETAR IMÁGENES
       # ==================================================
       - name: Tag Docker images
         if: github.event_name == 'push'
@@ -80,7 +79,7 @@ jobs:
             ${{ secrets.DOCKERHUB_USERNAME }}/etf-consumidor:latest
 
       # ==================================================
-      # 7. PUBLICAR ETF-BFF EN DOCKER HUB
+      # 7. PUSH ETF-BFF
       # ==================================================
       - name: Push etf-bff image
         if: github.event_name == 'push'
@@ -89,7 +88,7 @@ jobs:
             ${{ secrets.DOCKERHUB_USERNAME }}/etf-bff:latest
 
       # ==================================================
-      # 8. PUBLICAR ETF-CONSUMIDOR EN DOCKER HUB
+      # 8. PUSH ETF-CONSUMIDOR
       # ==================================================
       - name: Push etf-consumidor image
         if: github.event_name == 'push'
@@ -98,39 +97,42 @@ jobs:
             ${{ secrets.DOCKERHUB_USERNAME }}/etf-consumidor:latest
 
       # ==================================================
-      # 9. CONFIGURAR LA CLAVE SSH
+      # 9. CONFIGURAR CLAVE SSH
       # ==================================================
       - name: Add SSH key
         if: github.event_name == 'push'
         run: |
           mkdir -p ~/.ssh
 
-          echo "${{ secrets.EC2_SSH_KEY }}" \
+          printf '%s\n' "${{ secrets.EC2_SSH_KEY }}" \
+            | tr -d '\r' \
             > ~/.ssh/id_rsa
 
           chmod 600 ~/.ssh/id_rsa
 
       # ==================================================
-      # 10. PROBAR CONEXIÓN CON EC2
+      # 10. PROBAR CONEXIÓN SSH
       # ==================================================
       - name: Test SSH connection
         if: github.event_name == 'push'
         run: |
           ssh \
             -i ~/.ssh/id_rsa \
+            -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
             ${{ secrets.USER_SERVER }}@${{ secrets.EC2_HOST }} \
             "echo 'Conexión SSH correcta con EC2'"
 
       # ==================================================
-      # 11. DESPLEGAR LOS DOS MICROSERVICIOS EN EC2
+      # 11. DESPLEGAR EN EC2
       # ==================================================
       - name: Deploy ETF microservices in EC2
         if: github.event_name == 'push'
         run: |
           ssh \
             -i ~/.ssh/id_rsa \
+            -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
             ${{ secrets.USER_SERVER }}@${{ secrets.EC2_HOST }} << 'EOF'
@@ -141,9 +143,6 @@ jobs:
           echo "Iniciando despliegue de ETF"
           echo "=========================================="
 
-          # ----------------------------------------------
-          # Iniciar sesión en Docker Hub desde EC2
-          # ----------------------------------------------
           echo "Iniciando sesión en Docker Hub..."
 
           echo "${{ secrets.DOCKERHUB_TOKEN }}" | \
@@ -151,9 +150,6 @@ jobs:
             -u "${{ secrets.DOCKERHUB_USERNAME }}" \
             --password-stdin
 
-          # ----------------------------------------------
-          # Descargar las imágenes nuevas
-          # ----------------------------------------------
           echo "Descargando imagen etf-bff..."
 
           docker pull \
@@ -164,9 +160,6 @@ jobs:
           docker pull \
             ${{ secrets.DOCKERHUB_USERNAME }}/etf-consumidor:latest
 
-          # ----------------------------------------------
-          # Detener y eliminar contenedores anteriores
-          # ----------------------------------------------
           echo "Eliminando contenedores anteriores..."
 
           docker stop etf-bff || true
@@ -175,16 +168,34 @@ jobs:
           docker stop etf-consumidor || true
           docker rm etf-consumidor || true
 
-          # ----------------------------------------------
-          # Crear red compartida
-          # ----------------------------------------------
+          # ==================================================
+          # LIBERAR PUERTO 8080
+          # ==================================================
+          echo "Liberando puerto 8080..."
+
+          CONTENEDORES_8080=$(docker ps -q --filter publish=8080)
+
+          if [ -n "$CONTENEDORES_8080" ]; then
+            docker stop $CONTENEDORES_8080
+            docker rm $CONTENEDORES_8080
+          fi
+
+          # ==================================================
+          # LIBERAR PUERTO 8081
+          # ==================================================
+          echo "Liberando puerto 8081..."
+
+          CONTENEDORES_8081=$(docker ps -q --filter publish=8081)
+
+          if [ -n "$CONTENEDORES_8081" ]; then
+            docker stop $CONTENEDORES_8081
+            docker rm $CONTENEDORES_8081
+          fi
+
           echo "Preparando red app-network..."
 
           docker network create app-network || true
 
-          # ----------------------------------------------
-          # Conectar RabbitMQ a la red
-          # ----------------------------------------------
           echo "Conectando rabbitmq1..."
 
           docker network connect \
@@ -197,16 +208,10 @@ jobs:
             app-network \
             rabbitmq2 || true
 
-          # ----------------------------------------------
-          # Preparar directorio Oracle Wallet
-          # ----------------------------------------------
           echo "Preparando Oracle Wallet..."
 
           mkdir -p /home/ec2-user/oracle-wallet
 
-          # ----------------------------------------------
-          # Levantar ETF-BFF
-          # ----------------------------------------------
           echo "Levantando etf-bff..."
 
           docker run -d \
@@ -220,9 +225,6 @@ jobs:
             -e JWT_ISSUER_URI="${{ secrets.JWT_ISSUER_URI }}" \
             ${{ secrets.DOCKERHUB_USERNAME }}/etf-bff:latest
 
-          # ----------------------------------------------
-          # Levantar ETF-CONSUMIDOR
-          # ----------------------------------------------
           echo "Levantando etf-consumidor..."
 
           docker run -d \
@@ -241,23 +243,14 @@ jobs:
             -e JWT_ISSUER_URI="${{ secrets.JWT_ISSUER_URI }}" \
             ${{ secrets.DOCKERHUB_USERNAME }}/etf-consumidor:latest
 
-          # ----------------------------------------------
-          # Esperar el inicio de Spring Boot
-          # ----------------------------------------------
           echo "Esperando inicio de los microservicios..."
 
           sleep 30
 
-          # ----------------------------------------------
-          # Mostrar todos los contenedores
-          # ----------------------------------------------
           echo "Estado de los contenedores:"
 
           docker ps -a
 
-          # ----------------------------------------------
-          # Verificar contenedor ETF-BFF
-          # ----------------------------------------------
           echo "Verificando contenedor etf-bff..."
 
           if [ "$(docker inspect -f '{{.State.Running}}' etf-bff 2>/dev/null)" != "true" ]; then
@@ -270,9 +263,6 @@ jobs:
             exit 1
           fi
 
-          # ----------------------------------------------
-          # Verificar endpoint ETF-BFF
-          # ----------------------------------------------
           echo "Comprobando endpoint etf-bff..."
 
           if ! curl \
@@ -293,9 +283,6 @@ jobs:
           echo ""
           echo "etf-bff está funcionando."
 
-          # ----------------------------------------------
-          # Verificar contenedor ETF-CONSUMIDOR
-          # ----------------------------------------------
           echo "Verificando contenedor etf-consumidor..."
 
           if [ "$(docker inspect -f '{{.State.Running}}' etf-consumidor 2>/dev/null)" != "true" ]; then
@@ -308,9 +295,6 @@ jobs:
             exit 1
           fi
 
-          # ----------------------------------------------
-          # Verificar endpoint ETF-CONSUMIDOR
-          # ----------------------------------------------
           echo "Comprobando endpoint etf-consumidor..."
 
           if ! curl \
@@ -331,9 +315,6 @@ jobs:
           echo ""
           echo "etf-consumidor está funcionando."
 
-          # ----------------------------------------------
-          # Mostrar logs finales
-          # ----------------------------------------------
           echo "Últimos logs de etf-bff:"
 
           docker logs \
@@ -351,4 +332,3 @@ jobs:
           echo "=========================================="
 
           EOF
-
